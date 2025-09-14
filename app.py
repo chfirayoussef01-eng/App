@@ -1,164 +1,106 @@
 import streamlit as st
 import pandas as pd
-import requests
-import plotly.graph_objs as go
-from datetime import datetime
-import yfinance as yf
+from datetime import date, timedelta
+import os
+import plotly.express as px
 
 # ------------------------------
-# جلب البيانات من CoinGecko مع Cache
+# ملف حفظ البيانات
 # ------------------------------
-@st.cache_data(ttl=300)  # Cache لمدة 5 دقائق
-def get_coingecko_data(symbol="bitcoin", vs="usd", days="1", interval="minute"):
-    try:
-        url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart?vs_currency={vs}&days={days}&interval={interval}"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if "prices" not in data:
-            return pd.DataFrame()
-        df = pd.DataFrame(data["prices"], columns=["time", "price"])
-        df["time"] = pd.to_datetime(df["time"], unit="ms")
-        return df
-    except requests.exceptions.HTTPError as e:
-        if response.status_code == 429:
-            st.warning("⚠️ CoinGecko: Too Many Requests, سيتم استخدام Yahoo Finance كبديل.")
-        else:
-            st.error(f"❌ خطأ CoinGecko: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ خطأ CoinGecko: {e}")
-        return None
+FILE = "habits.csv"
+if os.path.exists(FILE):
+    df = pd.read_csv(FILE)
+else:
+    df = pd.DataFrame(columns=["Date", "Habit", "Done", "Color"])
 
 # ------------------------------
-# جلب البيانات من Yahoo Finance كنسخة احتياطية
+# إعداد الصفحة
 # ------------------------------
-@st.cache_data(ttl=300)
-def get_yahoo_data(symbol="BTC-USD", interval="1m", period="1d"):
-    df = yf.download(tickers=symbol, interval=interval, period=period, progress=False)
-    if df.empty:
-        return pd.DataFrame()
-    df.reset_index(inplace=True)
-    df.rename(columns={"Datetime": "time", "Close": "price"}, inplace=True)
-    return df
+st.set_page_config(page_title="Ultimate Habit Tracker", layout="wide")
+st.title("📋 Ultimate Daily Habit Tracker")
 
 # ------------------------------
-# توليد إشارات مبسطة (ICT + Candlestick)
+# إضافة عادة جديدة
 # ------------------------------
-def generate_signals(df):
-    signals = []
-    if df.empty: 
-        return signals
-    last_price = df["price"].iloc[-1]
-    prev_price = df["price"].iloc[-2]
-
-    # مثال بسيط: اخترق قمة
-    if last_price > prev_price * 1.002:
-        signals.append({"type": "BUY", "entry": last_price, "sl": last_price*0.99, "tp": last_price*1.01})
-    elif last_price < prev_price * 0.998:
-        signals.append({"type": "SELL", "entry": last_price, "sl": last_price*1.01, "tp": last_price*0.99})
-    return signals
+with st.form("add_habit"):
+    habit_name = st.text_input("أضف عادة جديدة:")
+    habit_color = st.color_picker("اختر لون العادة", "#00FF00")
+    submit = st.form_submit_button("➕ إضافة")
+    if submit and habit_name:
+        df = pd.concat([df, pd.DataFrame({"Date":[str(date.today())], "Habit":[habit_name], "Done":[False], "Color":[habit_color]})], ignore_index=True)
+        df.to_csv(FILE, index=False)
+        st.success(f"✅ تم إضافة عادة: {habit_name}")
 
 # ------------------------------
-# إعدادات Streamlit
+# عرض عادات اليوم كبطاقات ديناميكية
 # ------------------------------
-st.set_page_config(page_title="BTC Scalping App", layout="wide")
-st.sidebar.title("📌 Navigation")
-page = st.sidebar.radio("انتقل إلى:", ["📊 Dashboard", "🔥 Active Trades", "⏳ Pending Trades", "📜 Historique"])
+today_habits = df[df["Date"] == str(date.today())]
+st.subheader(f"🗓️ عادات اليوم ({date.today()})")
+
+if not today_habits.empty:
+    cols = st.columns(min(4, len(today_habits)))
+    for i, (idx, row) in enumerate(today_habits.iterrows()):
+        with cols[i % 4]:
+            done = st.checkbox(row["Habit"], value=row["Done"], key=idx)
+            df.at[idx, "Done"] = done
+            bg_color = "#A2FFA2" if done else row["Color"]
+            st.markdown(f"<div style='background-color:{bg_color}; padding:10px; border-radius:8px; text-align:center;'>{row['Habit']}</div>", unsafe_allow_html=True)
+    df.to_csv(FILE, index=False)
+else:
+    st.info("لا توجد عادات لليوم. أضف عادة جديدة!")
 
 # ------------------------------
-# قاعدة بيانات مؤقتة في Session
+# إشعارات تذكيرية يومية تلقائية
 # ------------------------------
-if "active_trades" not in st.session_state:
-    st.session_state.active_trades = []
-if "pending_trades" not in st.session_state:
-    st.session_state.pending_trades = []
-if "historique" not in st.session_state:
-    st.session_state.historique = []
+st.subheader("🔔 التذكيرات اليومية")
+for i, row in today_habits.iterrows():
+    if not row["Done"]:
+        st.warning(f"⏰ تذكير: لم تُنجز عادة '{row['Habit']}' اليوم! حاول إكمالها الآن.")
 
 # ------------------------------
-# 📊 Dashboard
+# ملخص يومي
 # ------------------------------
-if page == "📊 Dashboard":
-    st.title("📊 BTC Scalping Dashboard")
-
-    df = get_coingecko_data()
-    if df is None or df.empty:
-        df = get_yahoo_data()
-    
-    if df.empty:
-        st.warning("⚠️ لم يتم العثور على بيانات حالياً.")
-    else:
-        latest_price = df["price"].iloc[-1]
-        st.metric("💰 آخر سعر", f"{latest_price:.2f} USD")
-
-        # رسم الشارت
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["time"], y=df["price"], mode="lines", name="BTC/USD"))
-        fig.update_layout(height=500, title="BTC/USD - Live Chart", yaxis_title="Price (USD)")
-        st.plotly_chart(fig, use_container_width=True)
-
-        # توليد إشارات
-        signals = generate_signals(df)
-        st.subheader("📌 إشارات اليوم")
-        if signals:
-            for sig in signals:
-                st.success(f"{sig['type']} @ {sig['entry']:.2f} | SL: {sig['sl']:.2f} | TP: {sig['tp']:.2f}")
-                st.session_state.active_trades.append(sig)
-        else:
-            st.info("لا توجد إشارات قوية الآن.")
+st.subheader("📊 ملخص اليوم")
+completed = today_habits["Done"].sum()
+total = len(today_habits)
+st.metric("الإنجاز اليومي", f"{completed}/{total} تم ✅" if total>0 else "0/0")
 
 # ------------------------------
-# 🔥 Active Trades
+# إحصائيات الأسبوع
 # ------------------------------
-elif page == "🔥 Active Trades":
-    st.title("🔥 الصفقات النشطة")
-    if st.session_state.active_trades:
-        st.table(st.session_state.active_trades)
-    else:
-        st.info("لا توجد صفقات نشطة.")
-
-    if st.button("📌 إغلاق كل الصفقات"):
-        for trade in st.session_state.active_trades:
-            result = {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "type": trade["type"],
-                "entry": trade["entry"],
-                "sl": trade["sl"],
-                "tp": trade["tp"],
-                "result": "Closed"
-            }
-            st.session_state.historique.append(result)
-        st.session_state.active_trades = []
-        st.success("✅ تم إغلاق جميع الصفقات ونقلها للهستوريك")
+st.subheader("📈 تقدم الأسبوع")
+week_start = date.today() - timedelta(days=6)
+week_df = df[pd.to_datetime(df["Date"]) >= pd.to_datetime(week_start)]
+if not week_df.empty:
+    week_summary = week_df.pivot_table(index="Date", columns="Habit", values="Done", fill_value=0)
+    fig_week = px.bar(week_summary, barmode="group", title="التقدم الأسبوعي لكل عادة", labels={"value":"تم الإنجاز","Date":"التاريخ"})
+    st.plotly_chart(fig_week, use_container_width=True)
+else:
+    st.info("لا توجد بيانات لهذا الأسبوع.")
 
 # ------------------------------
-# ⏳ Pending Trades
+# إحصائيات الشهر
 # ------------------------------
-elif page == "⏳ Pending Trades":
-    st.title("⏳ الأوامر المعلقة")
-    if st.session_state.pending_trades:
-        st.table(st.session_state.pending_trades)
-    else:
-        st.info("لا توجد أوامر معلقة.")
-
-    with st.form("add_pending"):
-        entry = st.number_input("سعر الدخول", min_value=0.0, step=0.1)
-        sl = st.number_input("وقف الخسارة (SL)", min_value=0.0, step=0.1)
-        tp = st.number_input("جني الأرباح (TP)", min_value=0.0, step=0.1)
-        side = st.selectbox("الاتجاه", ["BUY", "SELL"])
-        submit = st.form_submit_button("➕ إضافة أمر")
-        if submit:
-            order = {"type": side, "entry": entry, "sl": sl, "tp": tp}
-            st.session_state.pending_trades.append(order)
-            st.success("✅ تم إضافة الأمر المعلق.")
+st.subheader("📊 تقدم الشهر")
+month_start = date.today() - timedelta(days=29)
+month_df = df[pd.to_datetime(df["Date"]) >= pd.to_datetime(month_start)]
+if not month_df.empty:
+    month_summary = month_df.pivot_table(index="Date", columns="Habit", values="Done", fill_value=0)
+    fig_month = px.bar(month_summary, barmode="stack", title="التقدم الشهري لكل عادة", labels={"value":"تم الإنجاز","Date":"التاريخ"})
+    st.plotly_chart(fig_month, use_container_width=True)
+else:
+    st.info("لا توجد بيانات للشهر الحالي.")
 
 # ------------------------------
-# 📜 Historique
+# تصدير واستيراد البيانات
 # ------------------------------
-elif page == "📜 Historique":
-    st.title("📜 سجل الصفقات (Historique)")
-    if st.session_state.historique:
-        st.table(st.session_state.historique)
-    else:
-        st.info("لا يوجد سجل صفقات حتى الآن.")
+st.subheader("💾 تصدير واستيراد البيانات")
+st.download_button("⬇️ تحميل البيانات CSV", df.to_csv(index=False), file_name="habits.csv", mime="text/csv")
+uploaded_file = st.file_uploader("⬆️ رفع ملف CSV", type="csv")
+if uploaded_file is not None:
+    imported_df = pd.read_csv(uploaded_file)
+    df = pd.concat([df, imported_df], ignore_index=True)
+    df.drop_duplicates(subset=["Date","Habit"], keep="last", inplace=True)
+    df.to_csv(FILE, index=False)
+    st.success("✅ تم استيراد البيانات بنجاح")
+    st.experimental_rerun()
