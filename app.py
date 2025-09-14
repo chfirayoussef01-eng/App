@@ -3,26 +3,44 @@ import pandas as pd
 import requests
 import plotly.graph_objs as go
 from datetime import datetime
+import yfinance as yf
 
 # ------------------------------
-# جلب البيانات من CoinGecko
+# جلب البيانات من CoinGecko مع Cache
 # ------------------------------
+@st.cache_data(ttl=300)  # Cache لمدة 5 دقائق
 def get_coingecko_data(symbol="bitcoin", vs="usd", days="1", interval="minute"):
     try:
         url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart?vs_currency={vs}&days={days}&interval={interval}"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-
         if "prices" not in data:
             return pd.DataFrame()
-
         df = pd.DataFrame(data["prices"], columns=["time", "price"])
         df["time"] = pd.to_datetime(df["time"], unit="ms")
         return df
+    except requests.exceptions.HTTPError as e:
+        if response.status_code == 429:
+            st.warning("⚠️ CoinGecko: Too Many Requests, سيتم استخدام Yahoo Finance كبديل.")
+        else:
+            st.error(f"❌ خطأ CoinGecko: {e}")
+        return None
     except Exception as e:
-        st.error(f"❌ خطأ في جلب البيانات: {e}")
+        st.error(f"❌ خطأ CoinGecko: {e}")
+        return None
+
+# ------------------------------
+# جلب البيانات من Yahoo Finance كنسخة احتياطية
+# ------------------------------
+@st.cache_data(ttl=300)
+def get_yahoo_data(symbol="BTC-USD", interval="1m", period="1d"):
+    df = yf.download(tickers=symbol, interval=interval, period=period, progress=False)
+    if df.empty:
         return pd.DataFrame()
+    df.reset_index(inplace=True)
+    df.rename(columns={"Datetime": "time", "Close": "price"}, inplace=True)
+    return df
 
 # ------------------------------
 # توليد إشارات مبسطة (ICT + Candlestick)
@@ -31,19 +49,14 @@ def generate_signals(df):
     signals = []
     if df.empty: 
         return signals
-
-    # شمعة آخر 5 دقايق
     last_price = df["price"].iloc[-1]
     prev_price = df["price"].iloc[-2]
 
-    # مثال مبسط: إذا السعر اخترق قمة
+    # مثال بسيط: اخترق قمة
     if last_price > prev_price * 1.002:
         signals.append({"type": "BUY", "entry": last_price, "sl": last_price*0.99, "tp": last_price*1.01})
-
-    # إذا السعر كسر قاع
     elif last_price < prev_price * 0.998:
         signals.append({"type": "SELL", "entry": last_price, "sl": last_price*1.01, "tp": last_price*0.99})
-
     return signals
 
 # ------------------------------
@@ -64,13 +77,15 @@ if "historique" not in st.session_state:
     st.session_state.historique = []
 
 # ------------------------------
-# 📊 الصفحة الرئيسية (Dashboard)
+# 📊 Dashboard
 # ------------------------------
 if page == "📊 Dashboard":
-    st.title("📊 BTC Scalping Dashboard (CoinGecko)")
+    st.title("📊 BTC Scalping Dashboard")
 
-    df = get_coingecko_data("bitcoin", "usd", days="1", interval="minute")
-
+    df = get_coingecko_data()
+    if df is None or df.empty:
+        df = get_yahoo_data()
+    
     if df.empty:
         st.warning("⚠️ لم يتم العثور على بيانات حالياً.")
     else:
@@ -80,8 +95,7 @@ if page == "📊 Dashboard":
         # رسم الشارت
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["time"], y=df["price"], mode="lines", name="BTC/USD"))
-
-        fig.update_layout(height=500, title="BTC/USD (CoinGecko) - 1m", yaxis_title="Price (USD)")
+        fig.update_layout(height=500, title="BTC/USD - Live Chart", yaxis_title="Price (USD)")
         st.plotly_chart(fig, use_container_width=True)
 
         # توليد إشارات
@@ -90,13 +104,12 @@ if page == "📊 Dashboard":
         if signals:
             for sig in signals:
                 st.success(f"{sig['type']} @ {sig['entry']:.2f} | SL: {sig['sl']:.2f} | TP: {sig['tp']:.2f}")
-                # إضافة للصفقات النشطة
                 st.session_state.active_trades.append(sig)
         else:
             st.info("لا توجد إشارات قوية الآن.")
 
 # ------------------------------
-# 🔥 الصفقات النشطة
+# 🔥 Active Trades
 # ------------------------------
 elif page == "🔥 Active Trades":
     st.title("🔥 الصفقات النشطة")
@@ -105,7 +118,6 @@ elif page == "🔥 Active Trades":
     else:
         st.info("لا توجد صفقات نشطة.")
 
-    # إغلاق الصفقات يدوياً
     if st.button("📌 إغلاق كل الصفقات"):
         for trade in st.session_state.active_trades:
             result = {
@@ -121,7 +133,7 @@ elif page == "🔥 Active Trades":
         st.success("✅ تم إغلاق جميع الصفقات ونقلها للهستوريك")
 
 # ------------------------------
-# ⏳ الأوامر المعلقة
+# ⏳ Pending Trades
 # ------------------------------
 elif page == "⏳ Pending Trades":
     st.title("⏳ الأوامر المعلقة")
@@ -130,21 +142,19 @@ elif page == "⏳ Pending Trades":
     else:
         st.info("لا توجد أوامر معلقة.")
 
-    # إضافة أمر يدوي
     with st.form("add_pending"):
         entry = st.number_input("سعر الدخول", min_value=0.0, step=0.1)
         sl = st.number_input("وقف الخسارة (SL)", min_value=0.0, step=0.1)
         tp = st.number_input("جني الأرباح (TP)", min_value=0.0, step=0.1)
         side = st.selectbox("الاتجاه", ["BUY", "SELL"])
         submit = st.form_submit_button("➕ إضافة أمر")
-
         if submit:
             order = {"type": side, "entry": entry, "sl": sl, "tp": tp}
             st.session_state.pending_trades.append(order)
             st.success("✅ تم إضافة الأمر المعلق.")
 
 # ------------------------------
-# 📜 صفحة الهستوريك
+# 📜 Historique
 # ------------------------------
 elif page == "📜 Historique":
     st.title("📜 سجل الصفقات (Historique)")
