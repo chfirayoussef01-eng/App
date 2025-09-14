@@ -14,7 +14,7 @@ else:
     df = pd.DataFrame(columns=["Date","Habit","Done","Color"])
 
 # ------------------------------
-# Streamlit session state لتخزين البيانات
+# Streamlit session state
 # ------------------------------
 if "df" not in st.session_state:
     st.session_state.df = df
@@ -22,15 +22,17 @@ if "df" not in st.session_state:
 # ------------------------------
 # إعداد الصفحة
 # ------------------------------
-st.set_page_config(page_title="Professional Habit Tracker", layout="wide")
-st.title("📋 Professional Habit Tracker")
+st.set_page_config(page_title="Luxury Habit Tracker", layout="wide")
+st.markdown("""
+    <h1 style='text-align: center; color: #FFD700;'>✨ Luxury Habit Tracker ✨</h1>
+""", unsafe_allow_html=True)
 
 # ------------------------------
 # إضافة عادة جديدة
 # ------------------------------
 with st.expander("➕ إضافة عادة جديدة"):
     habit_name = st.text_input("اسم العادة:")
-    habit_color = st.color_picker("لون العادة", "#00FF00")
+    habit_color = st.selectbox("لون العادة", ["#FFD700", "#800080", "#0A1172", "#4B0082", "#2F4F4F"])
     if st.button("إضافة عادة"):
         new_row = pd.DataFrame({
             "Date":[str(date.today())],
@@ -43,40 +45,28 @@ with st.expander("➕ إضافة عادة جديدة"):
         st.success(f"✅ تم إضافة عادة: {habit_name}")
 
 # ------------------------------
-# عرض وتعديل وحذف العادات بدون rerun
+# عرض العادات بشكل شبكي
 # ------------------------------
 st.subheader(f"🗓️ عادات اليوم ({date.today()})")
 today_habits = st.session_state.df[st.session_state.df["Date"]==str(date.today())]
 
 if not today_habits.empty:
-    remove_indices = []
+    cols = st.columns(3)
     for i, (idx,row) in enumerate(today_habits.iterrows()):
-        col1,col2,col3 = st.columns([4,1,1])
-        with col1:
-            done = st.checkbox(row["Habit"], value=row["Done"], key=f"done{idx}")
+        col = cols[i % 3]
+        with col:
+            card_bg = row["Color"] if not row["Done"] else "#2E2E2E"
+            card_text_color = "#FFFFFF" if row["Done"] else "#000000"
+            st.markdown(f"""
+                <div style='background-color: {card_bg}; padding: 15px; border-radius: 15px; margin-bottom: 10px; text-align:center;'>
+                    <h3 style='color:{card_text_color};'>{row['Habit']}</h3>
+                    <input type="checkbox" {"checked" if row["Done"] else ""} onclick="window.dispatchEvent(new Event('streamlit:rerun'));">
+                </div>
+            """, unsafe_allow_html=True)
+            done = st.checkbox("", value=row["Done"], key=f"done{idx}")
             st.session_state.df.at[idx,"Done"]=done
-        with col2:
-            new_color = st.color_picker("", value=row["Color"], key=f"color{idx}")
-            st.session_state.df.at[idx,"Color"]=new_color
-        with col3:
-            if st.button("❌", key=f"del{idx}"):
-                remove_indices.append(idx)
-    # حذف الصفوف مباشرة بدون rerun
-    if remove_indices:
-        st.session_state.df = st.session_state.df.drop(remove_indices)
-        st.session_state.df.to_csv(FILE,index=False)
-        st.success("تم حذف العادة بنجاح!")
 else:
     st.info("لا توجد عادات لليوم.")
-
-# ------------------------------
-# تذكيرات يومية
-# ------------------------------
-st.subheader("🔔 التذكيرات اليومية")
-today_habits = st.session_state.df[st.session_state.df["Date"]==str(date.today())]
-for i,row in today_habits.iterrows():
-    if not row["Done"]:
-        st.warning(f"⏰ تذكير: لم تُنجز عادة '{row['Habit']}' اليوم!")
 
 # ------------------------------
 # ملخص اليوم
@@ -98,7 +88,8 @@ if not week_df.empty:
         week_summary,
         barmode="group",
         title="التقدم الأسبوعي لكل عادة",
-        labels={"value":"تم الإنجاز","Date":"التاريخ"}
+        labels={"value":"تم الإنجاز","Date":"التاريخ"},
+        color_discrete_sequence=px.colors.sequential.Emrld
     )
     st.plotly_chart(fig_week,use_container_width=True)
 else:
@@ -116,7 +107,8 @@ if not month_df.empty:
         month_summary,
         barmode="stack",
         title="التقدم الشهري لكل عادة",
-        labels={"value":"تم الإنجاز","Date":"التاريخ"}
+        labels={"value":"تم الإنجاز","Date":"التاريخ"},
+        color_discrete_sequence=px.colors.sequential.Teal
     )
     st.plotly_chart(fig_month,use_container_width=True)
 else:
